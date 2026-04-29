@@ -562,4 +562,25 @@ rm -f wired navi history.log
 ## Output
 1. **Compile soal 1** 
 ![Output compile](assets/soal_1/CompileSoal1.png)
-2. **Compile ** 
+2. **Compile server `wired.c`**
+![Output compile](assets/soal_1/ServerWired.png)
+3. **Compile client 1**
+![Output compile](assets/soal_1/Client1.png)
+4. **Compile client 2**
+![Output compile](assets/soal_1/Client2.png)
+5. **Tes Duplikat client**
+![Output compile](assets/soal_1/ClientDuplikat.png)
+6. **Input Admin `The Knights`**
+![Output compile](assets/soal_1/Admin.png)
+7. **Check Server Uptime**
+![Output compile](assets/soal_1/AdminOpsi2.png)
+8. **Admin Disconnect**
+![Output compile](assets/soal_1/AdminDisconnect.png)
+9. **Excute Emergency ShutDown**
+![Output compile](assets/soal_1/ShutDown.png)
+10. **History.log**
+![Output compile](assets/soal_1/History.png)
+
+---
+## Soal 2
+
