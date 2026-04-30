@@ -581,6 +581,376 @@ rm -f wired navi history.log
 10. **History.log**
 ![Output compile](assets/soal_1/History.png)
 
+## Kendala
+- Kesulitan memahami penggunaan socket TCP di awal
+- Sinkronisasi pesan antar client
+
 ---
 ## Soal 2
+Pada soal ini dibuat sebuah sistem game sederhana berbasis **shared memory (IPC)** menggunakan bahasa C. Program terdiri dari dua komponen utama, yaitu server (`orion.c`) dan client (`eternal.c`), yang saling terhubung melalui shared memory untuk menyimpan dan mengakses data secara bersamaan.
+
+Server bertugas menginisialisasi dan mengelola shared memory, termasuk data player, status battle, serta sinkronisasi menggunakan mutex. Client digunakan oleh user untuk melakukan berbagai aktivitas seperti registrasi, login, membeli senjata, matchmaking, dan bertarung dalam sistem battle.
+
+## Penjelasan Program
+### 1. `arena.h`
+File `arena.h` berfungsi sebagai header utama yang menyimpan semua konstanta dan struktur data yang digunakan oleh `orion.c` dan `eternal.c`.
+
+Isi utama dari file ini adalah:
+
+- `SHM_KEY` sebagai key shared memory.
+- `Player` untuk menyimpan data player seperti username, password, gold, level, XP, weapon, dan history.
+- `Battle` untuk menyimpan status battle seperti nama player, HP, damage, ultimate, log battle, dan pemenang.
+- `Arena` sebagai struct utama yang disimpan di shared memory.
+
+Struct `Arena` menjadi pusat data bersama yang dapat diakses oleh server dan client.
+
+```c
+typedef struct {
+    int magic;
+    pthread_mutex_t mutex;
+    Player players[MAX_PLAYERS];
+    char waiting_player[NAME_SIZE];
+    Battle battle;
+} Arena;
+```
+Mutex digunakan agar data shared memory tidak rusak ketika diakses oleh banyak proses secara bersamaan.
+### Kode Lengkap `arena.h`
+```c
+#ifndef ARENA_H
+#define ARENA_H
+#include <pthread.h>
+#include <time.h>
+
+#define SHM_KEY 0x00001234
+#define MAX_PLAYERS 50
+#define MAX_HISTORY 20
+#define NAME_SIZE 50
+#define PASS_SIZE 50
+
+#define BASE_HEALTH 100
+#define BASE_DAMAGE 10
+
+#define GOLD_START 150
+#define LEVEL_START 1
+#define XP_START 0
+#define MATCH_TIME 35
+typedef struct {
+    char opponent[NAME_SIZE];
+    char result[10];
+    int xp_gain;
+    char time_text[20];
+} History;
+        typedef struct {
+    char username[NAME_SIZE];
+    char password[PASS_SIZE];
+    int used;
+    int logged_in;
+    int gold;
+    int level;
+    int xp;
+    int weapon_damage;
+    History history[MAX_HISTORY];
+    int history_count;
+} Player;
+typedef struct {
+    int active;
+    int bot;
+    int rewarded;
+    char p1[NAME_SIZE];
+    char p2[NAME_SIZE];
+    int hp1;
+    int hp2;
+    int damage1;
+    int damage2;
+    int ultimate1;
+    int ultimate2;
+    time_t last_attack1;
+    time_t last_attack2;
+    char log[5][100];
+    int log_count;
+    char winner[NAME_SIZE];
+} Battle;
+
+        typedef struct {
+    int magic;
+    pthread_mutex_t mutex;
+    Player players[MAX_PLAYERS];
+    char waiting_player[NAME_SIZE];
+    Battle battle;
+} Arena;
+#endif
+```
+### 2. `orion.c`
+File `orion.c` berperan sebagai server utama. Program ini bertugas membuat dan menginisialisasi shared memory yang akan digunakan oleh client.
+
+Bagian penting dari program `orion.c`:
+```c
+shmget(SHM_KEY, sizeof(Arena), IPC_CREAT | 0666);
+```
+Kode tersebut membuat shared memory dengan ukuran sebesar struct Arena.
+```c
+shmat(shmid, NULL, 0);
+```
+Kode tersebut menghubungkan shared memory ke proses `orion`.
+
+`orion.c` juga menginisialisasi mutex agar bisa digunakan antar proses:
+```c
+pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+```
+Selain itu, `orion.c` menyediakan beberapa command:
+```
+users   : melihat semua player
+battle  : melihat status battle
+reset   : reset arena
+exit    : keluar dari server
+```
+Dengan demikian, `orion.c` berfungsi sebagai pengelola utama shared memory dan pemantau kondisi game.
+### Kode Lengkap `orion.c`
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/shm.h>
+#include "arena.h"
+
+void init_arena(Arena *arena) {
+        pthread_mutexattr_t attr;
+
+    memset(arena, 0, sizeof(Arena));
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+    pthread_mutex_init(&arena->mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+    arena->magic = 777;
+}
+        int main() {
+    int shmid;
+    Arena *arena;
+    char command[50];
+    shmid = shmget(SHM_KEY, sizeof(Arena), IPC_CREAT | 0666);
+    if (shmid < 0) {
+        perror("shmget");
+        return 1;
+    }
+    arena = (Arena *)shmat(shmid, NULL, 0);
+        if (arena == (void *)-1) {
+        perror("shmat");
+        return 1;
+    }
+
+    if (arena->magic != 777) {
+        init_arena(arena);
+    }
+    printf("Orion is ready.\n");
+    printf("SHM_KEY: 0x00001234\n");
+    printf("Commands: users, battle, reset, exit\n");
+        while (1) {
+        printf("orion> ");
+        fflush(stdout);
+                if (fgets(command, sizeof(command), stdin) == NULL) {
+            break;
+        }
+        command[strcspn(command, "\n")] = '\0';
+        if (strcmp(command, "exit") == 0) {
+            break;
+        } else if (strcmp(command, "users") == 0) {
+            pthread_mutex_lock(&arena->mutex);
+            printf("\n=== USERS ===\n");
+            for (int i = 0; i < MAX_PLAYERS; i++) {
+                if (arena->players[i].used) {
+                    printf("%s | Gold: %d | Level: %d | XP: %d | Login: %d | Weapon: +%d\n",
+                           arena->players[i].username,
+                           arena->players[i].gold,
+                           arena->players[i].level,
+                           arena->players[i].xp,
+                           arena->players[i].logged_in,
+                           arena->players[i].weapon_damage);
+                }
+            }
+            pthread_mutex_unlock(&arena->mutex);
+        } else if (strcmp(command, "battle") == 0) {
+            pthread_mutex_lock(&arena->mutex);
+            printf("\n=== BATTLE STATUS ===\n");
+            if (arena->battle.active) {
+                printf("%s vs %s\n", arena->battle.p1, arena->battle.p2);
+                printf("HP: %d vs %d\n", arena->battle.hp1, arena->battle.hp2);
+                printf("Damage: %d vs %d\n", arena->battle.damage1, arena->battle.damage2);
+            } else {
+                printf("No active battle.\n");
+            }
+            pthread_mutex_unlock(&arena->mutex);
+        } else if (strcmp(command, "reset") == 0) {
+            pthread_mutex_lock(&arena->mutex);
+            init_arena(arena);
+            pthread_mutex_unlock(&arena->mutex);
+
+            printf("Arena reset.\n");
+        } else {
+            printf("Unknown command.\n");
+            printf("Commands: users, battle, reset, exit\n");
+        }
+    }
+    shmdt(arena);
+    return 0;
+}
+```
+### 3. `eternal.c`
+File `eternal.c` berperan sebagai client atau program yang digunakan player untuk bermain.
+
+Program ini terhubung ke shared memory yang sudah dibuat oleh `orion.c` menggunakan:
+```
+shmget(SHM_KEY, sizeof(Arena), 0666);
+shmat(shmid, NULL, 0);
+```
+Fitur utama pada `eternal.c` adalah:
+```
+Register akun
+Login akun
+Logout
+Melihat profile
+Membeli weapon di armory
+Matchmaking
+Battle PvP atau melawan bot
+Menampilkan history battle
+```
+Setiap kali data shared memory diakses atau diubah, program menggunakan mutex:
+```
+pthread_mutex_lock(&arena->mutex);
+/* akses atau ubah data */
+pthread_mutex_unlock(&arena->mutex);
+```
+Hal ini dilakukan untuk mencegah race condition ketika ada lebih dari satu client yang berjalan bersamaan.
+
+Sistem battle menggunakan command:
+```
+a : attack biasa
+u : ultimate attack
+q : keluar dari tampilan battle
+```
+Damage dan health dihitung berdasarkan XP dan weapon:
+```
+Damage = BASE_DAMAGE + (XP / 50) + weapon_damage
+Health = BASE_HEALTH + (XP / 10)
+```
+### Kode `eternal.c`
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/shm.h>
+#include <time.h>
+#include <sys/select.h>
+#include "arena.h"
+
+Arena *arena;
+
+void trim(char *s) {
+    s[strcspn(s, "\n")] = '\0';
+}
+void input_text(const char *label, char *buf, int size) {
+    printf("%s", label);
+    fflush(stdout);
+    if (fgets(buf, size, stdin) == NULL) {
+        buf[0] = '\0';
+        return;
+    }
+    trim(buf);
+}
+int find_player(const char *username) {
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (arena->players[i].used &&
+            strcmp(arena->players[i].username, username) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+void time_now(char *buf) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    strftime(buf, 20, "%H:%M", t);
+}
+.... (selebihnya dapat melihat di soal2)
+```
+### 4. `Makefile`
+File `Makefile` digunakan untuk mempermudah proses compile dan pembersihan file hasil compile.
+
+Command utama:
+```
+make
+```
+Digunakan untuk compile `orion.c` dan `eternal.c`.
+```
+server: orion.c arena.h
+	$(CC) $(CFLAGS) orion.c -o orion
+
+client: eternal.c arena.h
+	$(CC) $(CFLAGS) eternal.c -o eternal
+```
+Target `clean` digunakan untuk menghapus file executable:
+```
+make clean
+```
+Target `clear_ipc` digunakan untuk menghapus shared memory yang masih tersimpan di sistem:
+```
+make clear_ipc
+```
+Bagian ini penting karena shared memory tidak otomatis hilang ketika program ditutup.
+### Kode `Makefile`
+```
+CC = gcc
+CFLAGS = -Wall -pthread
+
+all: server client
+
+server: orion.c arena.h
+        $(CC) $(CFLAGS) orion.c -o orion
+
+client: eternal.c arena.h
+        $(CC) $(CFLAGS) eternal.c -o eternal
+
+clean:
+        rm -f orion eternal
+
+clear_ipc:
+        ipcs -m | grep 0x00001234 | awk '{print $$2}' | xargs -r ipcrm -m
+```
+## Output
+1. **Compile soal 2** 
+![Output compile](assets/soal_2/CompileSoal2.png)
+2. **Compile orion** 
+![Output compile](assets/soal_2/RunOrion.png)
+3. **Compile eternal user 1** 
+![Output compile](assets/soal_2/Eternal1.png)
+4. **Compile eternal user 2** 
+![Output compile](assets/soal_2/Eternal2.png)
+5. **Choose Opsi 1 (Battle user 1)** 
+![Output compile](assets/soal_2/BattleEternal1.png)
+6. **Choose Opsi 1 (Battle user 2)** 
+![Output compile](assets/soal_2/BattleStart2.png)
+7. **Battle Started** 
+![Output compile](assets/soal_2/BattleStart1.png)
+8. **Victory User 1** 
+![Output compile](assets/soal_2/Victory.png)
+9. **Defeat User 2** 
+![Output compile](assets/soal_2/Defeat.png)
+10. **Check History user 1** 
+![Output compile](assets/soal_2/History1.png)
+11. **Check History user 2** 
+![Output compile](assets/soal_2/History2.png)
+12. **Exit Program**
+![Output compile](assets/soal_2/Exit.png)
+
+## Kendala
+1. Sinkronisasi antar proses  
+Program menggunakan shared memory yang diakses oleh banyak client secara bersamaan.
+2. Pengelolaan shared memory  
+Shared memory tidak otomatis terhapus setelah program selesai.
+
+---
+
+
+
 
